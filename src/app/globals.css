@@ -1,0 +1,83 @@
+@import "tailwindcss";
+
+/* Type and radii follow the reference admin portal; colours are a black and
+   white scheme, with an all-black "secure" sign-in screen. */
+@theme {
+  --font-sans: var(--font-geist), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-eb-garamond), "Iowan Old Style", Georgia, serif;
+
+  /* Monochrome theme: neutral greys for surfaces and lines, black as the
+     primary/action colour. The token names are kept so components don't
+     change. Status colours stay (muted) so order, stock and review state
+     remain readable, and they always appear alongside a text label. */
+  --color-cream-50: #fafafa;
+  --color-cream-100: #f5f5f5;
+  --color-cream-200: #eeeeee;
+  --color-cream-300: #e0e0e0;
+  --color-cream-400: #c4c4c4;
+
+  --color-ink-300: #bdbdbd;
+  --color-ink-500: #737373;
+  --color-ink-700: #404040;
+  --color-ink-900: #0a0a0a;
+
+  --color-primary-50: #f2f2f2;
+  --color-primary-100: #e5e5e5;
+  --color-primary-500: #333333;
+  --color-primary-600: #111111;
+  --color-primary-700: #000000;
+  --color-primary-800: #000000;
+
+  --color-gold-50: #f2f2f2;
+  --color-gold-300: #d4d4d4;
+  --color-gold-400: #111111;
+  --color-gold-600: #404040;
+
+  --color-success-50: #edf7ee;
+  --color-success-500: #2e7d3b;
+  --color-warning-50: #fdf5e7;
+  --color-warning-500: #a26d0c;
+  --color-danger-50: #fbeceb;
+  --color-danger-500: #b3261e;
+  --color-info-50: #f2f2f2;
+  --color-info-500: #404040;
+
+  --color-secure-500: #8a8a8a;
+  --color-secure-700: #262626;
+  --color-secure-800: #141414;
+  --color-secure-900: #0a0a0a;
+  --color-secure-950: #000000;
+  --color-secure-accent: #ffffff;
+
+  --radius-xs: 3px;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 16px;
+  --radius-pill: 999px;
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  background: var(--color-cream-100);
+  color: var(--color-ink-900);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Thin, quiet scrollbars for the sidebar and wide tables. */
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-cream-400) transparent;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+.animate-fade-in {
+  animation: fade-in 160ms ease-out;
+}
