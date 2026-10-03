@@ -15,8 +15,10 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${geist.variable} ${garamond.variable}`}>
-      <body>
+    // Browser extensions (password managers, Grammarly…) add attributes to
+    // <html>/<body> before React loads; ignore those, not real mismatches.
+    <html lang="en" className={`${geist.variable} ${garamond.variable}`} suppressHydrationWarning>
+      <body suppressHydrationWarning>
         <ToastProvider>
           <AuthProvider>{children}</AuthProvider>
         </ToastProvider>

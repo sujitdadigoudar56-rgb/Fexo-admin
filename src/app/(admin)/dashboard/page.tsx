@@ -92,7 +92,18 @@ export default function DashboardPage() {
         <div className={cn("flex flex-col gap-6 transition-opacity", loading && "opacity-60")}>
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <Kpi label="Revenue" value={formatMoney(data.kpis.revenue)} icon={IndianRupee} footer={<Change value={data.kpis.revenue_change} />} />
-            <Kpi label="Orders" value={formatNumber(data.kpis.orders)} icon={ShoppingBag} footer={<Change value={data.kpis.orders_change} />} />
+            <Kpi label="Orders" value={formatNumber(data.kpis.orders)}               icon={ShoppingBag}
+              footer={
+                <span className="flex flex-col gap-0.5">
+                  <Change value={data.kpis.orders_change} />
+                  {data.kpis.awaiting_payment > 0 && (
+                    <Link href="/orders" className="text-xs text-warning-500 hover:underline">
+                      {data.kpis.awaiting_payment} awaiting online payment
+                    </Link>
+                  )}
+                </span>
+              }
+            />
             <Kpi
               label="New customers"
               value={formatNumber(data.kpis.new_customers)}

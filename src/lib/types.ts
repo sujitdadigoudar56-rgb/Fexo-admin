@@ -97,6 +97,8 @@ export type Collection = {
 };
 
 export type OrderStatus = "pending" | "confirmed" | "processing" | "shipped" | "delivered" | "cancelled";
+export type PaymentMethod = "razorpay" | "cod";
+export type PaymentStatus = "pending" | "paid" | "failed" | "refunded";
 
 export type OrderCustomer = { id: number; username: string; email: string; full_name: string };
 
@@ -119,7 +121,10 @@ export type OrderListItem = {
   order_number: string;
   customer: OrderCustomer;
   status: OrderStatus;
-  payment_method: string;
+  payment_method: PaymentMethod;
+  payment_status: PaymentStatus;
+  /** Online order not paid yet — not a real sale until paid. */
+  awaiting_payment: boolean;
   grand_total: number;
   item_count: number | null;
   created_at: string;
@@ -146,6 +151,11 @@ export type Order = Omit<OrderListItem, "item_count"> & {
   coupon_code: string | null;
   notes: string;
   items: OrderItem[];
+  razorpay_order_id: string;
+  razorpay_payment_id: string;
+  razorpay_refund_id: string;
+  paid_at: string | null;
+  is_finalized: boolean;
   updated_at: string;
 };
 
@@ -199,6 +209,7 @@ export type DashboardStats = {
     pending_orders: number;
     unread_messages: number;
     pending_reviews: number;
+    awaiting_payment: number;
   };
   sales: { date: string; revenue: number; orders: number }[];
   status_breakdown: { status: OrderStatus; label: string; count: number }[];

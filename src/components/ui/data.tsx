@@ -95,6 +95,30 @@ export function StatusBadge({ status }: { status: string }) {
   );
 }
 
+const paymentTones: Record<string, { tone: Tone; label: string }> = {
+  paid: { tone: "success", label: "Paid" },
+  pending: { tone: "warning", label: "Unpaid" },
+  failed: { tone: "danger", label: "Payment failed" },
+  refunded: { tone: "info", label: "Refunded" },
+};
+
+/** Payment state, worded for the method (COD "pending" = collect on delivery). */
+export function PaymentBadge({ method, status }: { method: string; status: string }) {
+  if (method === "cod" && status === "pending") {
+    return (
+      <Badge tone="neutral" dot>
+        COD · due
+      </Badge>
+    );
+  }
+  const p = paymentTones[status] ?? { tone: "neutral" as Tone, label: status };
+  return (
+    <Badge tone={p.tone} dot>
+      {method === "razorpay" && status === "paid" ? "Paid online" : p.label}
+    </Badge>
+  );
+}
+
 export function ActiveBadge({ active, on = "Active", off = "Hidden" }: { active: boolean; on?: string; off?: string }) {
   return (
     <Badge tone={active ? "success" : "neutral"} dot>

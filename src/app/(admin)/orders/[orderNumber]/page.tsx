@@ -9,7 +9,8 @@ import { useResource } from "@/lib/hooks";
 import { cn, formatDate, formatMoney } from "@/lib/format";
 import type { Address, Order, OrderStatus } from "@/lib/types";
 import { Button } from "@/components/ui/button";
-import { Card, CardHeader, ErrorBlock, LoadingBlock, PageHeader, StatusBadge, Table, Td, Th } from "@/components/ui/data";
+import { Badge, Card, CardHeader, ErrorBlock, LoadingBlock, PageHeader, PaymentBadge, StatusBadge, Table, Td, Th } from "@/components/ui/data";
+import { ConfirmDialog } from "@/components/ui/modal";
 import { Field, Select, Textarea } from "@/components/ui/form";
 import { useToast } from "@/components/ui/toast";
 
@@ -84,6 +85,8 @@ export default function OrderDetailPage() {
   const [status, setStatus] = useState<OrderStatus | "">("");
   const [notes, setNotes] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [confirm, setConfirm] = useState<"cancel" | "refund" | null>(null);
+  const [busy, setBusy] = useState(false);
 
   if (error) return <ErrorBlock message={error} onRetry={reload} />;
   if (loading && !order) return <LoadingBlock />;
@@ -93,8 +96,14 @@ export default function OrderDetailPage() {
   const nextNotes = notes ?? order.notes;
   const dirty = nextStatus !== order.status || nextNotes !== order.notes;
 
-  async function save(patch?: Partial<Pick<Order, "status" | "notes">>) {
+  async function save(patch?: Partial<Pick<Order, "status" | "notes" | "payment_status">>) {
     if (!order) return;
+    // Cancelling restocks and (for paid online orders) refunds — confirm first.
+    const target = patch?.status ?? nextStatus;
+    if (target === "cancelled" && order.status !== "cancelled" && confirm !== "cancel") {
+      setConfirm("cancel");
+      return;
+    }
     setSaving(true);
     try {
       const updated = await api.patch<Order>(`/orders/${order.order_number}/`, patch ?? { status: nextStatus, notes: nextNotes });
@@ -102,6 +111,7 @@ export default function OrderDetailPage() {
       setStatus("");
       setNotes(null);
       toast.success(`Order ${updated.order_number} updated.`);
+      setConfirm(null);
     } catch (e) {
       toast.error(e instanceof ApiError ? e.message : "Could not update order.");
     } finally {
@@ -110,7 +120,24 @@ export default function OrderDetailPage() {
   }
 
   const idx = FLOW.indexOf(order.status);
-  const advanceTo = idx >= 0 && idx < FLOW.length - 1 ? FLOW[idx + 1] : null;
+  // Unpaid online orders can't move forward — only be cancelled.
+  const advanceTo = !order.awaiting_payment && idx >= 0 && idx < FLOW.length - 1 ? FLOW[idx + 1] : null;
+  const paidOnline = order.payment_method === "razorpay" && order.payment_status === "paid";
+
+  async function refund() {
+    if (!order) return;
+    setBusy(true);
+    try {
+      const updated = await api.post<Order>(`/orders/${order.order_number}/refund/`, { reason: "Refunded by admin" });
+      setData(updated);
+      toast.success(`Refund issued for ${updated.order_number}.`);
+      setConfirm(null);
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Refund failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <>
@@ -121,10 +148,11 @@ export default function OrderDetailPage() {
           </Link>
         }
         title={`Order ${order.order_number}`}
-        description={`Placed ${formatDate(order.created_at, true)} · ${order.payment_method === "cod" ? "Cash on delivery" : order.payment_method}`}
+        description={`Placed ${formatDate(order.created_at, true)} · ${order.payment_method === "cod" ? "Cash on delivery" : "Online payment (Razorpay)"}`}
         actions={
           <div className="flex items-center gap-2 print:hidden">
-            <StatusBadge status={order.status} />
+            <PaymentBadge method={order.payment_method} status={order.payment_status} />
+            {order.awaiting_payment && order.status === "pending" ? <Badge tone="warning">Awaiting payment</Badge> : <StatusBadge status={order.status} />}
             <Button variant="secondary" onClick={() => window.print()}>
               <Printer className="size-4" /> Print
             </Button>
@@ -199,16 +227,75 @@ export default function OrderDetailPage() {
         </div>
 
         <div className="flex flex-col gap-6">
+          <Card>
+            <CardHeader title="Payment" action={<PaymentBadge method={order.payment_method} status={order.payment_status} />} />
+            <dl className="grid grid-cols-[110px_1fr] gap-x-3 gap-y-2 p-5 text-sm">
+              <dt className="text-ink-500">Method</dt>
+              <dd>{order.payment_method === "razorpay" ? "Online (Razorpay)" : "Cash on delivery"}</dd>
+              <dt className="text-ink-500">Amount</dt>
+              <dd className="font-semibold">{formatMoney(order.grand_total, true)}</dd>
+              {order.paid_at && (
+                <>
+                  <dt className="text-ink-500">Paid at</dt>
+                  <dd>{formatDate(order.paid_at, true)}</dd>
+                </>
+              )}
+              {order.razorpay_order_id && (
+                <>
+                  <dt className="text-ink-500">Razorpay order</dt>
+                  <dd className="font-mono text-xs break-all">{order.razorpay_order_id}</dd>
+                </>
+              )}
+              {order.razorpay_payment_id && (
+                <>
+                  <dt className="text-ink-500">Payment ID</dt>
+                  <dd className="font-mono text-xs break-all">{order.razorpay_payment_id}</dd>
+                </>
+              )}
+              {order.razorpay_refund_id && (
+                <>
+                  <dt className="text-ink-500">Refund ID</dt>
+                  <dd className="font-mono text-xs break-all">{order.razorpay_refund_id}</dd>
+                </>
+              )}
+            </dl>
+            {order.awaiting_payment && (
+              <p className="mx-5 mb-5 rounded-sm bg-warning-50 px-3 py-2 text-xs text-warning-500">
+                The customer hasn&apos;t paid yet. Stock isn&apos;t reserved and the order can&apos;t be fulfilled until payment succeeds.
+              </p>
+            )}
+            {(paidOnline || (order.payment_method === "cod" && order.payment_status === "pending" && order.status !== "cancelled")) && (
+              <div className="flex flex-wrap gap-2 border-t border-cream-300 p-4 print:hidden">
+                {paidOnline && (
+                  <Button variant="secondary" size="sm" onClick={() => setConfirm("refund")}>
+                    Refund {formatMoney(order.grand_total)}
+                  </Button>
+                )}
+                {order.payment_method === "cod" && order.payment_status === "pending" && order.status !== "cancelled" && (
+                  <Button variant="secondary" size="sm" loading={saving} onClick={() => save({ payment_status: "paid" })}>
+                    Mark cash received
+                  </Button>
+                )}
+              </div>
+            )}
+          </Card>
+
           <Card className="print:hidden">
             <CardHeader title="Fulfilment" />
             <div className="flex flex-col gap-4 p-5">
-              <Field label="Status" htmlFor="status">
-                <Select id="status" value={nextStatus} onChange={(e) => setStatus(e.target.value as OrderStatus)}>
-                  {(Object.keys(LABELS) as OrderStatus[]).map((s) => (
-                    <option key={s} value={s}>
-                      {LABELS[s]}
-                    </option>
-                  ))}
+              <Field
+                label="Status"
+                htmlFor="status"
+                hint={order.awaiting_payment ? "Unpaid online order — it can only be cancelled." : order.status === "cancelled" ? "Cancelled orders can't be reopened." : undefined}
+              >
+                <Select id="status" value={nextStatus} disabled={order.status === "cancelled"} onChange={(e) => setStatus(e.target.value as OrderStatus)}>
+                  {(Object.keys(LABELS) as OrderStatus[])
+                    .filter((s) => !order.awaiting_payment || s === "pending" || s === "cancelled")
+                    .map((s) => (
+                      <option key={s} value={s}>
+                        {LABELS[s]}
+                      </option>
+                    ))}
                 </Select>
               </Field>
               <Field label="Internal notes" hint="Only visible to staff." htmlFor="notes">
@@ -241,6 +328,30 @@ export default function OrderDetailPage() {
           </Card>
         </div>
       </div>
+      <ConfirmDialog
+        open={confirm === "cancel"}
+        title="Cancel this order?"
+        confirmLabel="Cancel order"
+        loading={saving}
+        message={
+          paidOnline
+            ? `This refunds ${formatMoney(order.grand_total, true)} to the customer through Razorpay and returns the items to stock.`
+            : order.is_finalized
+              ? "The items will be returned to stock. This can't be undone."
+              : "The order will be cancelled. This can't be undone."
+        }
+        onConfirm={() => save({ status: "cancelled", notes: nextNotes })}
+        onClose={() => setConfirm(null)}
+      />
+      <ConfirmDialog
+        open={confirm === "refund"}
+        title="Refund this payment?"
+        confirmLabel="Refund"
+        loading={busy}
+        message={`${formatMoney(order.grand_total, true)} will be refunded in full to the customer's original payment method via Razorpay. The order status won't change — cancel it too if it won't ship.`}
+        onConfirm={refund}
+        onClose={() => setConfirm(null)}
+      />
     </>
   );
 }

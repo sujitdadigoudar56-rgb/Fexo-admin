@@ -7,7 +7,7 @@ import { ShoppingBag } from "lucide-react";
 import { useList } from "@/lib/hooks";
 import { cn, formatDate, formatMoney } from "@/lib/format";
 import type { OrderListItem } from "@/lib/types";
-import { Card, EmptyState, ErrorBlock, LoadingBlock, PageHeader, Pagination, SearchInput, StatusBadge, Table, Td, Th } from "@/components/ui/data";
+import { Badge, Card, EmptyState, PaymentBadge, ErrorBlock, LoadingBlock, PageHeader, Pagination, SearchInput, StatusBadge, Table, Td, Th } from "@/components/ui/data";
 import { Input, Select } from "@/components/ui/form";
 
 const PAGE_SIZE = 20;
@@ -26,6 +26,8 @@ export default function OrdersPage() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState("");
+  const [paymentStatus, setPaymentStatus] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [ordering, setOrdering] = useState("-created_at");
@@ -35,6 +37,8 @@ export default function OrdersPage() {
     page_size: PAGE_SIZE,
     search,
     status,
+    payment_method: paymentMethod,
+    payment_status: paymentStatus,
     date_from: dateFrom,
     date_to: dateTo,
     ordering,
@@ -45,7 +49,7 @@ export default function OrdersPage() {
     setPage(1);
   }, []);
 
-  const filtered = !!(search || status || dateFrom || dateTo);
+  const filtered = !!(search || status || dateFrom || dateTo || paymentMethod || paymentStatus);
 
   return (
     <>
@@ -84,6 +88,18 @@ export default function OrdersPage() {
               To
               <Input type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(1); }} className="lg:w-40" />
             </label>
+            <Select aria-label="Payment method" value={paymentMethod} onChange={(e) => { setPaymentMethod(e.target.value); setPage(1); }} className="lg:w-40">
+              <option value="">Method: All</option>
+              <option value="razorpay">Online (Razorpay)</option>
+              <option value="cod">Cash on delivery</option>
+            </Select>
+            <Select aria-label="Payment status" value={paymentStatus} onChange={(e) => { setPaymentStatus(e.target.value); setPage(1); }} className="lg:w-40">
+              <option value="">Payment: All</option>
+              <option value="paid">Paid</option>
+              <option value="pending">Unpaid / due</option>
+              <option value="failed">Failed</option>
+              <option value="refunded">Refunded</option>
+            </Select>
             <Select aria-label="Sort" value={ordering} onChange={(e) => setOrdering(e.target.value)} className="lg:w-44">
               <option value="-created_at">Newest first</option>
               <option value="created_at">Oldest first</option>
@@ -130,9 +146,12 @@ export default function OrdersPage() {
                       <p className="text-xs text-ink-500">{o.customer.email}</p>
                     </Td>
                     <Td className="text-right tabular-nums">{o.item_count ?? 0}</Td>
-                    <Td className="text-ink-700 uppercase">{o.payment_method}</Td>
                     <Td>
-                      <StatusBadge status={o.status} />
+                      <p className="text-xs text-ink-500">{o.payment_method === "razorpay" ? "Online" : "COD"}</p>
+                      <PaymentBadge method={o.payment_method} status={o.payment_status} />
+                    </Td>
+                    <Td>
+                      {o.awaiting_payment && o.status === "pending" ? <Badge tone="warning">Awaiting payment</Badge> : <StatusBadge status={o.status} />}
                     </Td>
                     <Td className="text-right font-semibold tabular-nums">{formatMoney(o.grand_total)}</Td>
                   </tr>
