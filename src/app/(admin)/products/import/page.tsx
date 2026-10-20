@@ -86,7 +86,9 @@ export default function ImportProductsPage() {
                 <Th>Name</Th>
                 <Th>SKU</Th>
                 <Th>Price</Th>
-                <Th>Sizes / stock</Th>
+                <Th>Colours</Th>
+                <Th>Sizes</Th>
+                <Th>Stock</Th>
                 <Th>Images</Th>
                 <Th>Result</Th>
               </tr>
@@ -97,7 +99,9 @@ export default function ImportProductsPage() {
                   <Td className="font-semibold">{d.form.name || <span className="text-danger-500">Missing name</span>}</Td>
                   <Td>{d.form.sku || <span className="text-danger-500">Missing</span>}</Td>
                   <Td className="tabular-nums">₹{d.form.price || "—"}</Td>
-                  <Td>{d.form.sizes.map((s) => `${s}:${d.stock[s] ?? 0}`).join("  ") || "—"}</Td>
+                  <Td>{d.form.colors.join(", ") || <span className="text-danger-500">None</span>}</Td>
+                  <Td>{d.form.sizes.join(", ") || "—"}</Td>
+                  <Td className="tabular-nums">{Object.values(d.stock).reduce((a, b) => a + b, 0)}</Td>
                   <Td>{d.images.length}</Td>
                   <Td>{results[i] ? <Badge tone={results[i].tone} dot>{results[i].text}</Badge> : <span className="text-ink-500">Pending</span>}</Td>
                 </tr>

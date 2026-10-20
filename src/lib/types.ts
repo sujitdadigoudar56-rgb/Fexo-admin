@@ -20,11 +20,14 @@ export type ProductImage = {
   alt_text: string;
   is_primary: boolean;
   display_order: number;
+  color: string;
 };
 
 export type ProductVariant = {
   id: number;
   product: number;
+  sku: string;
+  color: string;
   size: string;
   stock_quantity: number;
   low_stock_threshold: number;
@@ -58,7 +61,7 @@ export type Product = Omit<ProductListItem, "image"> & {
   fabric_details: string;
   size_guide: string;
   gst_percent: number;
-  color: string;
+  colors: string[];
   available_sizes: string;
   meta_title: string;
   meta_description: string;
@@ -137,6 +140,7 @@ export type OrderItem = {
   product_name: string;
   unit_price: number;
   quantity: number;
+  color: string;
   size: string;
   line_total: number;
 };
@@ -219,6 +223,7 @@ export type DashboardStats = {
     product_id: number;
     product_name: string;
     sku: string;
+    color: string;
     size: string;
     stock_quantity: number;
     low_stock_threshold: number;

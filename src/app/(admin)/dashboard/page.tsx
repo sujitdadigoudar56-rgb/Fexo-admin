@@ -218,10 +218,10 @@ export default function DashboardPage() {
                 ) : (
                   <ul className="divide-y divide-cream-200">
                     {data.low_stock.map((v) => (
-                      <li key={`${v.product_id}-${v.size}`} className="flex items-center gap-3 px-5 py-3 text-sm">
+                      <li key={`${v.product_id}-${v.color}-${v.size}`} className="flex items-center gap-3 px-5 py-3 text-sm">
                         <TriangleAlert className={cn("size-4 shrink-0", v.stock_quantity === 0 ? "text-danger-500" : "text-warning-500")} aria-hidden />
                         <Link href={`/products/${v.product_id}`} className="flex-1 truncate font-medium hover:text-primary-600">
-                          {v.product_name} <span className="text-ink-500">· {v.size}</span>
+                          {v.product_name} <span className="text-ink-500">· {[v.color, v.size].filter(Boolean).join(" / ")}</span>
                         </Link>
                         <span className={cn("text-xs font-semibold", v.stock_quantity === 0 ? "text-danger-500" : "text-warning-500")}>
                           {v.stock_quantity === 0 ? "Out of stock" : `${v.stock_quantity} left`}

@@ -180,7 +180,7 @@ export default function OrderDetailPage() {
               <thead>
                 <tr>
                   <Th>Product</Th>
-                  <Th>Size</Th>
+                  <Th>Variant</Th>
                   <Th className="text-right">Unit price</Th>
                   <Th className="text-right">Qty</Th>
                   <Th className="text-right">Total</Th>
@@ -199,7 +199,7 @@ export default function OrderDetailPage() {
                       )}
                       {!item.product && <span className="block text-xs text-ink-500">Product no longer exists</span>}
                     </Td>
-                    <Td>{item.size || "—"}</Td>
+                    <Td>{[item.color, item.size].filter(Boolean).join(" / ") || "—"}</Td>
                     <Td className="text-right tabular-nums">{formatMoney(item.unit_price, true)}</Td>
                     <Td className="text-right tabular-nums">{item.quantity}</Td>
                     <Td className="text-right font-semibold tabular-nums">{formatMoney(item.line_total, true)}</Td>

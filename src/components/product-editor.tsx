@@ -15,6 +15,16 @@ import { ConfirmDialog } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast";
 
 const SIZES = ["XS", "S", "M", "L", "XL", "XXL"];
+// Must match Product.COLORS in the backend.
+const COLORS = ["Gray", "Navy Blue", "Black", "Brown", "Charcoal", "White", "Beige", "Maroon", "Cement Gray", "Cream", "Olive Green"];
+
+// Mirrors make_variant_sku() in the backend: FX-OS-01 + Navy Blue + M -> FX-OS-01-NAVYBLUE-M
+const variantSku = (sku: string, color: string, size: string) => [sku, color.replace(/ /g, "").toUpperCase(), size].filter(Boolean).join("-");
+const stockKey = (color: string, size: string) => `${color}|${size}`;
+const byColorThenSize = (a: { color: string; size: string }, b: { color: string; size: string }) =>
+  COLORS.indexOf(a.color) - COLORS.indexOf(b.color) || SIZES.indexOf(a.size) - SIZES.indexOf(b.size);
+
+export type NewImage = { file: File; color: string };
 
 type FormState = {
   name: string;
@@ -29,7 +39,7 @@ type FormState = {
   price: string;
   compare_at_price: string;
   gst_percent: string;
-  color: string;
+  colors: string[];
   sizes: string[];
   is_featured: boolean;
   is_trending: boolean;
@@ -54,7 +64,7 @@ function toForm(p?: Product): FormState {
     price: p ? String(p.price) : "",
     compare_at_price: p?.compare_at_price != null ? String(p.compare_at_price) : "",
     gst_percent: p ? String(p.gst_percent) : "5",
-    color: p?.color ?? "",
+    colors: p?.colors ?? [],
     sizes: p?.available_sizes ? p.available_sizes.split(",").map((s) => s.trim()).filter(Boolean) : ["S", "M", "L"],
     is_featured: p?.is_featured ?? false,
     is_trending: p?.is_trending ?? false,
@@ -80,7 +90,7 @@ function toPayload(f: FormState) {
     price: f.price === "" ? null : Number(f.price),
     compare_at_price: f.compare_at_price === "" ? null : Number(f.compare_at_price),
     gst_percent: f.gst_percent === "" ? 0 : Number(f.gst_percent),
-    color: f.color,
+    colors: COLORS.filter((c) => f.colors.includes(c)),
     available_sizes: SIZES.filter((s) => f.sizes.includes(s)).join(","),
     is_featured: f.is_featured,
     is_trending: f.is_trending,
@@ -92,9 +102,11 @@ function toPayload(f: FormState) {
   };
 }
 
-export type Draft = { form: FormState; images: string[]; stock: Record<string, number> };
+export type Draft = { form: FormState; images: { url: string; color: string }[]; stock: Record<string, number> };
 
-// Map one product from an import file (same shape as the API payload, plus `images` URLs and `stock` per size).
+// Map one product from an import file: the API payload plus
+//   images: ["url", ...] or [{ "url": "...", "color": "Black" }, ...]
+//   stock:  { "Black": { "S": 5, "M": 3 }, ... }   (or { "S": 5 } when there is a single colour)
 export function fromJson(o: Record<string, unknown>): Draft {
   const form = toForm();
   for (const k of Object.keys(form) as (keyof FormState)[]) {
@@ -104,23 +116,28 @@ export function fromJson(o: Record<string, unknown>): Draft {
   if (typeof o.available_sizes === "string") {
     form.sizes = o.available_sizes.split(",").map((s) => s.trim().toUpperCase()).filter((s) => SIZES.includes(s));
   }
-  return {
-    form,
-    images: Array.isArray(o.images) ? o.images.map(String) : [],
-    stock: o.stock && typeof o.stock === "object" ? (o.stock as Record<string, number>) : {},
-  };
+  if (!form.colors.length && typeof o.color === "string" && o.color) form.colors = [o.color];
+  const stock: Record<string, number> = {};
+  for (const [k, v] of Object.entries((o.stock as Record<string, unknown>) ?? {})) {
+    if (v && typeof v === "object") for (const [size, n] of Object.entries(v)) stock[stockKey(k, size)] = Number(n) || 0;
+    else stock[stockKey(form.colors[0] ?? "", k)] = Number(v) || 0;
+  }
+  const images = Array.isArray(o.images)
+    ? o.images.map((i) => (typeof i === "string" ? { url: i, color: "" } : { url: String(i?.url ?? ""), color: String(i?.color ?? "") }))
+    : [];
+  return { form, images, stock };
 }
 
 // ponytail: browser fetch, so image hosts must allow CORS; move downloading to the backend if they don't.
-export async function urlsToFiles(urls: string[]) {
-  const files: File[] = [];
+export async function urlsToFiles(images: { url: string; color: string }[]) {
+  const files: NewImage[] = [];
   let failed = 0;
-  for (const url of urls) {
+  for (const { url, color } of images) {
     try {
       const res = await fetch(url);
       if (!res.ok) throw new Error();
       const blob = await res.blob();
-      files.push(new File([blob], url.split("/").pop()?.split("?")[0] || "image.jpg", { type: blob.type }));
+      files.push({ file: new File([blob], url.split("/").pop()?.split("?")[0] || "image.jpg", { type: blob.type }), color });
     } catch {
       failed++;
     }
@@ -129,15 +146,17 @@ export async function urlsToFiles(urls: string[]) {
 }
 
 // Creates the product, then its images and stock. `complete` is false if the product exists but images/stock failed.
-export async function createProduct(form: FormState, files: File[], stock: Record<string, number>) {
+export async function createProduct(form: FormState, images: NewImage[], stock: Record<string, number>) {
+  // The backend creates one variant per colour x size.
   const product = await api.post<Product>("/products/", toPayload(form));
   try {
-    for (const [i, file] of files.entries()) {
-      await api.post("/product-images/", toFormData({ product: product.id, image: file, alt_text: product.name, display_order: i }));
+    for (const [i, img] of images.entries()) {
+      await api.post("/product-images/", toFormData({ product: product.id, image: img.file, color: img.color, alt_text: product.name, display_order: i }));
     }
-    const fresh = await api.get<Product>(`/products/${product.id}/`);
     await Promise.all(
-      fresh.variants.filter((v) => stock[v.size]).map((v) => api.patch(`/product-variants/${v.id}/`, { stock_quantity: Number(stock[v.size]) })),
+      product.variants
+        .filter((v) => stock[stockKey(v.color, v.size)])
+        .map((v) => api.patch(`/product-variants/${v.id}/`, { stock_quantity: stock[stockKey(v.color, v.size)] })),
     );
     return { product, complete: true };
   } catch {
@@ -155,7 +174,7 @@ export function ProductEditor({ product, onSaved }: { product?: Product; onSaved
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [newImages, setNewImages] = useState<File[]>([]);
+  const [newImages, setNewImages] = useState<NewImage[]>([]);
   const [stock, setStock] = useState<Record<string, number>>({});
   const isNew = !product;
 
@@ -175,8 +194,6 @@ export function ProductEditor({ product, onSaved }: { product?: Product; onSaved
     setSaving(true);
     setErrors({});
     try {
-      const payload = toPayload(form);
-      let saved: Product;
       if (isNew) {
         const { product: created, complete } = await createProduct(form, newImages, stock);
         // Product exists now; images/stock failing shouldn't lose it, so finish on its edit page.
@@ -189,14 +206,8 @@ export function ProductEditor({ product, onSaved }: { product?: Product; onSaved
         router.replace("/products");
         return;
       }
-      saved = await api.patch<Product>(`/products/${product.id}/`, payload);
-      // Give newly ticked sizes a stock row so they can be stocked below.
-      const existing = new Set(saved.variants.map((v) => v.size));
-      const missing = form.sizes.filter((s) => !existing.has(s));
-      if (missing.length) {
-        await Promise.all(missing.map((size) => api.post("/product-variants/", { product: saved.id, size, stock_quantity: 0 })));
-        saved = await api.get<Product>(`/products/${saved.id}/`);
-      }
+      // The backend adds a variant for every newly ticked colour x size.
+      const saved = await api.patch<Product>(`/products/${product.id}/`, toPayload(form));
       toast.success("Product saved.");
       onSaved?.(saved);
     } catch (e) {
@@ -295,22 +306,36 @@ export function ProductEditor({ product, onSaved }: { product?: Product; onSaved
             </div>
           </Card>
 
-          {product ? <ImagesCard product={product} onChange={onSaved} /> : <NewImagesCard files={newImages} onChange={setNewImages} />}
+          {product ? <ImagesCard product={product} onChange={onSaved} /> : <NewImagesCard images={newImages} colors={form.colors} onChange={setNewImages} />}
           {product ? (
             <InventoryCard product={product} onChange={onSaved} />
           ) : (
             <Card>
-              <CardHeader title="Inventory" description="Stock per size. Tick sizes under Attributes to add more." />
-              {form.sizes.length === 0 ? (
-                <p className="px-5 py-6 text-sm text-ink-500">No sizes selected.</p>
+              <CardHeader title="Variants & stock" description="One variant per colour and size, each with its own variant ID. Pick colours and sizes under Attributes." />
+              {form.colors.length === 0 || form.sizes.length === 0 ? (
+                <p className="px-5 py-6 text-sm text-ink-500">Select at least one colour and one size.</p>
               ) : (
-                <div className="flex flex-wrap gap-4 p-5">
-                  {SIZES.filter((s) => form.sizes.includes(s)).map((s) => (
-                    <Field key={s} label={s} htmlFor={`stock-${s}`}>
-                      <Input id={`stock-${s}`} type="number" min={0} value={stock[s] ?? 0} onChange={(e) => setStock((st) => ({ ...st, [s]: Math.max(0, Number(e.target.value) || 0) }))} className="h-9 w-24" />
-                    </Field>
-                  ))}
-                </div>
+                <Table>
+                  <thead>
+                    <tr>
+                      <Th>Colour</Th>
+                      {SIZES.filter((s) => form.sizes.includes(s)).map((s) => <Th key={s}>{s}</Th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {COLORS.filter((c) => form.colors.includes(c)).map((c) => (
+                      <tr key={c}>
+                        <Td className="font-semibold">{c}</Td>
+                        {SIZES.filter((s) => form.sizes.includes(s)).map((s) => (
+                          <Td key={s}>
+                            <Input type="number" min={0} aria-label={`Stock for ${c} ${s}`} value={stock[stockKey(c, s)] ?? 0} onChange={(e) => setStock((st) => ({ ...st, [stockKey(c, s)]: Math.max(0, Number(e.target.value) || 0) }))} className="h-9 w-20" />
+                            <div className="mt-1 text-[11px] text-ink-500">{variantSku(form.sku, c, s)}</div>
+                          </Td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </Table>
               )}
             </Card>
           )}
@@ -380,29 +405,11 @@ export function ProductEditor({ product, onSaved }: { product?: Product; onSaved
           <Card>
             <CardHeader title="Attributes" />
             <div className="flex flex-col gap-4 p-5">
-              <Field label="Colour" htmlFor="color" error={err("color")}>
-                <Input id="color" value={form.color} placeholder="e.g. Charcoal" onChange={(e) => set("color", e.target.value)} />
+              <Field label="Colours" hint="Every colour of this design, in one product." error={err("colors")}>
+                <Chips options={COLORS} value={form.colors} onChange={(v) => set("colors", v)} />
               </Field>
-              <Field label="Available sizes" hint="Each size gets its own stock count." error={err("available_sizes")}>
-                <div className="flex flex-wrap gap-2">
-                  {SIZES.map((s) => {
-                    const on = form.sizes.includes(s);
-                    return (
-                      <button
-                        key={s}
-                        type="button"
-                        aria-pressed={on}
-                        onClick={() => set("sizes", on ? form.sizes.filter((x) => x !== s) : [...form.sizes, s])}
-                        className={cn(
-                          "h-9 min-w-11 rounded-sm border px-3 text-sm font-semibold transition-colors",
-                          on ? "border-primary-600 bg-primary-600 text-white" : "border-cream-300 bg-white text-ink-700 hover:bg-cream-100",
-                        )}
-                      >
-                        {s}
-                      </button>
-                    );
-                  })}
-                </div>
+              <Field label="Available sizes" hint="Each colour x size gets its own variant ID and stock." error={err("available_sizes")}>
+                <Chips options={SIZES} value={form.sizes} onChange={(v) => set("sizes", v)} />
               </Field>
             </div>
           </Card>
@@ -447,19 +454,60 @@ export function ProductEditor({ product, onSaved }: { product?: Product; onSaved
   );
 }
 
+function Chips({ options, value, onChange }: { options: string[]; value: string[]; onChange: (v: string[]) => void }) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {options.map((o) => {
+        const on = value.includes(o);
+        return (
+          <button
+            key={o}
+            type="button"
+            aria-pressed={on}
+            onClick={() => onChange(on ? value.filter((x) => x !== o) : [...value, o])}
+            className={cn(
+              "h-9 min-w-11 rounded-sm border px-3 text-sm font-semibold transition-colors",
+              on ? "border-primary-600 bg-primary-600 text-white" : "border-cream-300 bg-white text-ink-700 hover:bg-cream-100",
+            )}
+          >
+            {o}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// Tag an image with the colour it shows; untagged images show for every colour.
+function ImageColorSelect({ value, colors, onChange, disabled }: { value: string; colors: string[]; onChange: (c: string) => void; disabled?: boolean }) {
+  return (
+    <select
+      aria-label="Image colour"
+      value={value}
+      disabled={disabled}
+      onChange={(e) => onChange(e.target.value)}
+      className="absolute top-2 right-2 max-w-[60%] rounded-sm border border-cream-300 bg-white/95 px-1 py-0.5 text-[11px]"
+    >
+      <option value="">All colours</option>
+      {(colors.includes(value) || !value ? colors : [...colors, value]).map((c) => <option key={c} value={c}>{c}</option>)}
+    </select>
+  );
+}
+
 // Images picked before the product exists; uploaded on create. First one becomes the main image.
-function NewImagesCard({ files, onChange }: { files: File[]; onChange: (f: File[]) => void }) {
-  const previews = useMemo(() => files.map((f) => URL.createObjectURL(f)), [files]);
+function NewImagesCard({ images, colors, onChange }: { images: NewImage[]; colors: string[]; onChange: (f: NewImage[]) => void }) {
+  const files = images.map((i) => i.file);
+  const previews = useMemo(() => images.map((i) => URL.createObjectURL(i.file)), [images]);
   useEffect(() => () => previews.forEach((u) => URL.revokeObjectURL(u)), [previews]);
   const picker = (
-    <input type="file" accept="image/*" multiple className="sr-only" onChange={(e) => { onChange([...files, ...Array.from(e.target.files ?? [])]); e.target.value = ""; }} />
+    <input type="file" accept="image/*" multiple className="sr-only" onChange={(e) => { onChange([...images, ...Array.from(e.target.files ?? []).map((file) => ({ file, color: colors.length === 1 ? colors[0] : "" }))]); e.target.value = ""; }} />
   );
 
   return (
     <Card>
       <CardHeader
         title="Images"
-        description="The first image is used on product cards."
+        description="The first image is used on product cards. Tag each image with its colour."
         action={
           <label className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-sm border border-cream-300 bg-white px-3 text-[13px] font-semibold hover:bg-cream-100">
             <ImagePlus className="size-4" /> Add images
@@ -481,13 +529,14 @@ function NewImagesCard({ files, onChange }: { files: File[]; onChange: (f: File[
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={src} alt={files[i].name} className="size-full object-cover" />
                 {i === 0 && <span className="absolute top-2 left-2"><Badge tone="primary">Main</Badge></span>}
+                <ImageColorSelect value={images[i].color} colors={colors} onChange={(c) => onChange(images.map((img, j) => (j === i ? { ...img, color: c } : img)))} />
                 <div className="absolute inset-x-0 bottom-0 flex justify-end gap-1 bg-gradient-to-t from-ink-900/60 to-transparent p-2 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
                   {i !== 0 && (
-                    <IconButton label="Set as main image" onClick={() => onChange([files[i], ...files.filter((_, j) => j !== i)])} className="bg-white/90 text-ink-900 hover:bg-white">
+                    <IconButton label="Set as main image" onClick={() => onChange([images[i], ...images.filter((_, j) => j !== i)])} className="bg-white/90 text-ink-900 hover:bg-white">
                       <Star className="size-4" />
                     </IconButton>
                   )}
-                  <IconButton label="Remove image" onClick={() => onChange(files.filter((_, j) => j !== i))} className="bg-white/90 text-danger-500 hover:bg-white">
+                  <IconButton label="Remove image" onClick={() => onChange(images.filter((_, j) => j !== i))} className="bg-white/90 text-danger-500 hover:bg-white">
                     <Trash2 className="size-4" />
                   </IconButton>
                 </div>
@@ -539,6 +588,18 @@ function ImagesCard({ product, onChange }: { product: Product; onChange?: (p: Pr
     }
   }
 
+  async function setColor(img: ProductImage, color: string) {
+    setBusy(img.id);
+    try {
+      await api.patch(`/product-images/${img.id}/`, { color });
+      await refresh();
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Could not update image.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function remove(img: ProductImage) {
     setBusy(img.id);
     try {
@@ -558,7 +619,7 @@ function ImagesCard({ product, onChange }: { product: Product; onChange?: (p: Pr
     <Card>
       <CardHeader
         title="Images"
-        description="The starred image is used on product cards."
+        description="The starred image is used on product cards. Tag each image with its colour."
         action={
           <label className={cn("inline-flex h-8 cursor-pointer items-center gap-2 rounded-sm border border-cream-300 bg-white px-3 text-[13px] font-semibold hover:bg-cream-100", uploading && "pointer-events-none opacity-50")}>
             <ImagePlus className="size-4" /> {uploading ? "Uploading…" : "Add images"}
@@ -580,6 +641,7 @@ function ImagesCard({ product, onChange }: { product: Product; onChange?: (p: Pr
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={img.image} alt={img.alt_text} className="size-full object-cover" />
                 {img.is_primary && <span className="absolute top-2 left-2"><Badge tone="primary">Main</Badge></span>}
+                <ImageColorSelect value={img.color} colors={product.colors} disabled={busy === img.id} onChange={(c) => setColor(img, c)} />
                 <div className="absolute inset-x-0 bottom-0 flex justify-end gap-1 bg-gradient-to-t from-ink-900/60 to-transparent p-2 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
                   {!img.is_primary && (
                     <IconButton label="Set as main image" onClick={() => makePrimary(img)} className="bg-white/90 text-ink-900 hover:bg-white">
@@ -643,15 +705,14 @@ function InventoryCard({ product, onChange }: { product: Product; onChange?: (p:
     }
   }
 
-  const order = (s: string) => SIZES.indexOf(s);
-  const sorted = [...rows].sort((a, b) => order(a.size) - order(b.size));
+  const sorted = [...rows].sort(byColorThenSize);
   const total = rows.reduce((s, r) => s + r.stock_quantity, 0);
 
   return (
     <Card>
       <CardHeader
-        title="Inventory"
-        description={`${total} units across ${rows.length} size${rows.length === 1 ? "" : "s"}. Tick sizes under Attributes to add more.`}
+        title="Variants & stock"
+        description={`${total} units across ${rows.length} variant${rows.length === 1 ? "" : "s"}. Tick colours and sizes under Attributes, then save, to add more.`}
         action={
           <Button size="sm" onClick={saveAll} disabled={!dirty.length} loading={saving}>
             Save inventory
@@ -659,11 +720,13 @@ function InventoryCard({ product, onChange }: { product: Product; onChange?: (p:
         }
       />
       {sorted.length === 0 ? (
-        <p className="px-5 py-6 text-sm text-ink-500">No sizes yet. Select sizes under Attributes and save the product.</p>
+        <p className="px-5 py-6 text-sm text-ink-500">No variants yet. Select colours and sizes under Attributes and save the product.</p>
       ) : (
         <Table>
           <thead>
             <tr>
+              <Th>Variant ID</Th>
+              <Th>Colour</Th>
               <Th>Size</Th>
               <Th>In stock</Th>
               <Th>Low-stock alert at</Th>
@@ -674,12 +737,14 @@ function InventoryCard({ product, onChange }: { product: Product; onChange?: (p:
           <tbody>
             {sorted.map((v) => (
               <tr key={v.id}>
+                <Td className="font-mono text-xs">{v.sku}</Td>
+                <Td>{v.color || "—"}</Td>
                 <Td className="font-semibold">{v.size}</Td>
                 <Td>
-                  <Input type="number" min={0} aria-label={`Stock for ${v.size}`} value={v.stock_quantity} onChange={(e) => update(v.id, "stock_quantity", e.target.value)} className="h-9 w-28" />
+                  <Input type="number" min={0} aria-label={`Stock for ${v.color} ${v.size}`} value={v.stock_quantity} onChange={(e) => update(v.id, "stock_quantity", e.target.value)} className="h-9 w-28" />
                 </Td>
                 <Td>
-                  <Input type="number" min={0} aria-label={`Low stock threshold for ${v.size}`} value={v.low_stock_threshold} onChange={(e) => update(v.id, "low_stock_threshold", e.target.value)} className="h-9 w-28" />
+                  <Input type="number" min={0} aria-label={`Low stock threshold for ${v.color} ${v.size}`} value={v.low_stock_threshold} onChange={(e) => update(v.id, "low_stock_threshold", e.target.value)} className="h-9 w-28" />
                 </Td>
                 <Td>
                   {v.stock_quantity === 0 ? (
@@ -691,7 +756,7 @@ function InventoryCard({ product, onChange }: { product: Product; onChange?: (p:
                   )}
                 </Td>
                 <Td>
-                  <IconButton label={`Remove size ${v.size}`} onClick={() => removeVariant(v)} className="hover:text-danger-500">
+                  <IconButton label={`Remove variant ${v.sku}`} onClick={() => removeVariant(v)} className="hover:text-danger-500">
                     <Trash2 className="size-4" />
                   </IconButton>
                 </Td>
