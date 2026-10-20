@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, ExternalLink, ImagePlus, Star, Trash2 } from "lucide-react";
@@ -92,6 +92,59 @@ function toPayload(f: FormState) {
   };
 }
 
+export type Draft = { form: FormState; images: string[]; stock: Record<string, number> };
+
+// Map one product from an import file (same shape as the API payload, plus `images` URLs and `stock` per size).
+export function fromJson(o: Record<string, unknown>): Draft {
+  const form = toForm();
+  for (const k of Object.keys(form) as (keyof FormState)[]) {
+    if (o[k] == null) continue;
+    form[k] = (typeof form[k] === "string" ? String(o[k]) : o[k]) as never;
+  }
+  if (typeof o.available_sizes === "string") {
+    form.sizes = o.available_sizes.split(",").map((s) => s.trim().toUpperCase()).filter((s) => SIZES.includes(s));
+  }
+  return {
+    form,
+    images: Array.isArray(o.images) ? o.images.map(String) : [],
+    stock: o.stock && typeof o.stock === "object" ? (o.stock as Record<string, number>) : {},
+  };
+}
+
+// ponytail: browser fetch, so image hosts must allow CORS; move downloading to the backend if they don't.
+export async function urlsToFiles(urls: string[]) {
+  const files: File[] = [];
+  let failed = 0;
+  for (const url of urls) {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error();
+      const blob = await res.blob();
+      files.push(new File([blob], url.split("/").pop()?.split("?")[0] || "image.jpg", { type: blob.type }));
+    } catch {
+      failed++;
+    }
+  }
+  return { files, failed };
+}
+
+// Creates the product, then its images and stock. `complete` is false if the product exists but images/stock failed.
+export async function createProduct(form: FormState, files: File[], stock: Record<string, number>) {
+  const product = await api.post<Product>("/products/", toPayload(form));
+  try {
+    for (const [i, file] of files.entries()) {
+      await api.post("/product-images/", toFormData({ product: product.id, image: file, alt_text: product.name, display_order: i }));
+    }
+    const fresh = await api.get<Product>(`/products/${product.id}/`);
+    await Promise.all(
+      fresh.variants.filter((v) => stock[v.size]).map((v) => api.patch(`/product-variants/${v.id}/`, { stock_quantity: Number(stock[v.size]) })),
+    );
+    return { product, complete: true };
+  } catch {
+    return { product, complete: false };
+  }
+}
+
 export function ProductEditor({ product, onSaved }: { product?: Product; onSaved?: (p: Product) => void }) {
   const router = useRouter();
   const toast = useToast();
@@ -102,6 +155,8 @@ export function ProductEditor({ product, onSaved }: { product?: Product; onSaved
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [newImages, setNewImages] = useState<File[]>([]);
+  const [stock, setStock] = useState<Record<string, number>>({});
   const isNew = !product;
 
   // Re-seed the form only when a different product loads — image/stock
@@ -123,9 +178,15 @@ export function ProductEditor({ product, onSaved }: { product?: Product; onSaved
       const payload = toPayload(form);
       let saved: Product;
       if (isNew) {
-        saved = await api.post<Product>("/products/", payload);
-        toast.success("Product created. Add images and stock next.");
-        router.replace(`/products/${saved.id}`);
+        const { product: created, complete } = await createProduct(form, newImages, stock);
+        // Product exists now; images/stock failing shouldn't lose it, so finish on its edit page.
+        if (!complete) {
+          toast.error("Product created, but some images or stock didn't save. Finish them here.");
+          router.replace(`/products/${created.id}`);
+          return;
+        }
+        toast.success("Product created.");
+        router.replace("/products");
         return;
       }
       saved = await api.patch<Product>(`/products/${product.id}/`, payload);
@@ -170,7 +231,7 @@ export function ProductEditor({ product, onSaved }: { product?: Product; onSaved
           </Link>
         }
         title={isNew ? "New product" : product.name}
-        description={isNew ? "Create the product, then add images and stock." : `SKU ${product.sku} · last edited ${formatDate(product.updated_at, true)}`}
+        description={isNew ? "Fill in the details, images and stock, then create." :`SKU ${product.sku} · last edited ${formatDate(product.updated_at, true)}`}
         actions={
           <>
             {!isNew && product.status === "published" && (
@@ -234,8 +295,25 @@ export function ProductEditor({ product, onSaved }: { product?: Product; onSaved
             </div>
           </Card>
 
-          {product && <ImagesCard product={product} onChange={onSaved} />}
-          {product && <InventoryCard product={product} onChange={onSaved} />}
+          {product ? <ImagesCard product={product} onChange={onSaved} /> : <NewImagesCard files={newImages} onChange={setNewImages} />}
+          {product ? (
+            <InventoryCard product={product} onChange={onSaved} />
+          ) : (
+            <Card>
+              <CardHeader title="Inventory" description="Stock per size. Tick sizes under Attributes to add more." />
+              {form.sizes.length === 0 ? (
+                <p className="px-5 py-6 text-sm text-ink-500">No sizes selected.</p>
+              ) : (
+                <div className="flex flex-wrap gap-4 p-5">
+                  {SIZES.filter((s) => form.sizes.includes(s)).map((s) => (
+                    <Field key={s} label={s} htmlFor={`stock-${s}`}>
+                      <Input id={`stock-${s}`} type="number" min={0} value={stock[s] ?? 0} onChange={(e) => setStock((st) => ({ ...st, [s]: Math.max(0, Number(e.target.value) || 0) }))} className="h-9 w-24" />
+                    </Field>
+                  ))}
+                </div>
+              )}
+            </Card>
+          )}
 
           <Card>
             <CardHeader title="Search engine listing" />
@@ -366,6 +444,59 @@ export function ProductEditor({ product, onSaved }: { product?: Product; onSaved
         onClose={() => setConfirmDelete(false)}
       />
     </form>
+  );
+}
+
+// Images picked before the product exists; uploaded on create. First one becomes the main image.
+function NewImagesCard({ files, onChange }: { files: File[]; onChange: (f: File[]) => void }) {
+  const previews = useMemo(() => files.map((f) => URL.createObjectURL(f)), [files]);
+  useEffect(() => () => previews.forEach((u) => URL.revokeObjectURL(u)), [previews]);
+  const picker = (
+    <input type="file" accept="image/*" multiple className="sr-only" onChange={(e) => { onChange([...files, ...Array.from(e.target.files ?? [])]); e.target.value = ""; }} />
+  );
+
+  return (
+    <Card>
+      <CardHeader
+        title="Images"
+        description="The first image is used on product cards."
+        action={
+          <label className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-sm border border-cream-300 bg-white px-3 text-[13px] font-semibold hover:bg-cream-100">
+            <ImagePlus className="size-4" /> Add images
+            {picker}
+          </label>
+        }
+      />
+      <div className="p-5">
+        {files.length === 0 ? (
+          <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-sm border border-dashed border-cream-400 bg-cream-50 py-10 text-sm text-ink-500 hover:bg-cream-100">
+            <ImagePlus className="size-6" />
+            Click to upload product images
+            {picker}
+          </label>
+        ) : (
+          <ul className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {previews.map((src, i) => (
+              <li key={src} className={cn("group relative aspect-[3/4] overflow-hidden rounded-sm border bg-cream-100", i === 0 ? "border-primary-600 ring-2 ring-primary-600/20" : "border-cream-300")}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={src} alt={files[i].name} className="size-full object-cover" />
+                {i === 0 && <span className="absolute top-2 left-2"><Badge tone="primary">Main</Badge></span>}
+                <div className="absolute inset-x-0 bottom-0 flex justify-end gap-1 bg-gradient-to-t from-ink-900/60 to-transparent p-2 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                  {i !== 0 && (
+                    <IconButton label="Set as main image" onClick={() => onChange([files[i], ...files.filter((_, j) => j !== i)])} className="bg-white/90 text-ink-900 hover:bg-white">
+                      <Star className="size-4" />
+                    </IconButton>
+                  )}
+                  <IconButton label="Remove image" onClick={() => onChange(files.filter((_, j) => j !== i))} className="bg-white/90 text-danger-500 hover:bg-white">
+                    <Trash2 className="size-4" />
+                  </IconButton>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </Card>
   );
 }
 

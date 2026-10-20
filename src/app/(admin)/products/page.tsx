@@ -3,7 +3,7 @@
 import { useCallback, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Package, Plus, Star } from "lucide-react";
+import { Package, Plus, Star, Upload } from "lucide-react";
 import { useList, useOptions } from "@/lib/hooks";
 import { cn, formatMoney } from "@/lib/format";
 import type { Category, ProductListItem } from "@/lib/types";
@@ -51,9 +51,14 @@ export default function ProductsPage() {
         title="Products"
         description="Everything in the catalog, including drafts and archived items."
         actions={
-          <LinkButton href="/products/new">
-            <Plus className="size-4" /> Add product
-          </LinkButton>
+          <>
+            <LinkButton href="/products/import" variant="secondary">
+              <Upload className="size-4" /> Import JSON
+            </LinkButton>
+            <LinkButton href="/products/new">
+              <Plus className="size-4" /> Add product
+            </LinkButton>
+          </>
         }
       />
 
